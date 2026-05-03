@@ -1,0 +1,96 @@
+# ============================================================
+# Fichier STANDALONE pour le développement local
+# Ne pas utiliser pour la production.
+#
+# Usage : docker compose -f docker-compose.dev.yml up --build
+#
+# Différences vs production :
+#   - HTTP uniquement sur http://localhost:8080 (pas de SSL, pas de cert)
+#   - MySQL exposé sur l'hôte au port 6033 (accès direct via client SQL)
+#   - Fonctionne sans root sur macOS, Linux et Windows (Docker Desktop)
+# ============================================================
+
+services:
+
+  db:
+    build: ./db
+    container_name: pmb_mysql_dev
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      BACKUP_PASSWORD: ${BACKUP_PASSWORD}
+    volumes:
+      - mysql_data_dev:/var/lib/mysql
+      - ./db/conf/my.cnf:/etc/mysql/conf.d/pmb.cnf:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:6033:6033"
+    networks:
+      - backend_dev
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--port=6033", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build: ./app
+    container_name: pmb_app_dev
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pmb_files_dev:/var/www/html/pmb
+      - ./app/conf/php.ini:/etc/php/7.4/apache2/php.ini:ro
+      - ./app/conf/apache-pmb.conf:/etc/apache2/sites-available/pmb.conf:ro
+      - ./app/patches/verif.class.php:/var/www/html/pmb/tables/requirements/classes/verif.class.php:ro
+      - ./app/patches/images/logo_memp.png:/var/www/html/pmb/opac_css/images/site/logo_memp.png:ro
+      - ./app/patches/images/logo_secondaire.png:/var/www/html/pmb/opac_css/images/site/logo_secondaire.png:ro
+      - ./app/patches/templates/common.tpl.php:/var/www/html/pmb/opac_css/includes/templates/common.tpl.php:ro
+      - ./app/patches/admin_templates/index.tpl.php:/var/www/html/pmb/includes/templates/index.tpl.php:ro
+      - ./app/patches/admin_templates/common.tpl.php:/var/www/html/pmb/includes/templates/common.tpl.php:ro
+    networks:
+      - frontend_dev
+      - backend_dev
+    expose:
+      - "9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/pmb/index.php"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  web:
+    build: ./nginx
+    container_name: pmb_nginx_dev
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/conf/pmb-dev.conf:/etc/nginx/conf.d/pmb.conf:ro
+    networks:
+      - frontend_dev
+
+volumes:
+  mysql_data_dev:
+    driver: local
+  pmb_files_dev:
+    driver: local
+
+networks:
+  frontend_dev:
+    driver: bridge
+  backend_dev:
+    driver: bridge
+    internal: true

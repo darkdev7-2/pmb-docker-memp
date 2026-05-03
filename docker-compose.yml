@@ -1,0 +1,87 @@
+services:
+
+  db:
+    build: ./db
+    container_name: pmb_mysql
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      BACKUP_PASSWORD: ${BACKUP_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/conf/my.cnf:/etc/mysql/conf.d/pmb.cnf:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - backup_data:/backup
+    networks:
+      - backend
+    expose:
+      - "6033"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--port=6033", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build: ./app
+    container_name: pmb_app
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pmb_files:/var/www/html/pmb
+      - ./app/conf/php.ini:/etc/php/7.4/apache2/php.ini:ro
+      - ./app/conf/apache-pmb.conf:/etc/apache2/sites-available/pmb.conf:ro
+      - ssl_certs:/etc/ssl/pmb
+    networks:
+      - frontend
+      - backend
+    expose:
+      - "9001"
+      - "9002"
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://localhost:9002/pmb/index.php"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  web:
+    build: ./nginx
+    container_name: pmb_nginx
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf/pmb.conf:/etc/nginx/conf.d/pmb.conf:ro
+      - ssl_certs:/etc/ssl/pmb:ro
+    networks:
+      - frontend
+
+volumes:
+  mysql_data:
+    driver: local
+  pmb_files:
+    driver: local
+  ssl_certs:
+    driver: local
+  backup_data:
+    driver: local
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
